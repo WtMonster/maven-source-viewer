@@ -143,7 +143,7 @@ try_decompile_fernflower() {
   local tmp_out_dir
   tmp_out_dir="$(mktemp -d "${TMP_DIR%/}/fernflower.XXXXXX")"
 
-  local args=()
+  local -a args=()
   if [[ -n "$extra_cp" ]]; then
     local cp_jar
     for cp_jar in ${extra_cp//:/ }; do
@@ -151,7 +151,7 @@ try_decompile_fernflower() {
     done
   fi
 
-  java -jar "$FERNFLOWER_JAR" "${args[@]}" "$jar" "$tmp_out_dir" >/dev/null 2>&1 || {
+  java -jar "$FERNFLOWER_JAR" "${args[@]+"${args[@]}"}" "$jar" "$tmp_out_dir" >/dev/null 2>&1 || {
     rm -rf "$tmp_out_dir" >/dev/null 2>&1 || true
     return 1
   }
