@@ -60,16 +60,39 @@ chmod +x ~/.claude/skills/maven-source-viewer/scripts/*.sh
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `M2_REPO` | `~/.m2/repository` | Maven 本地仓库路径 |
+| `MVN_BIN` | (空) | 指定 `mvn` 可执行文件路径 |
+| `MAVEN_HOME` | (空) | Maven 安装目录（使用 `$MAVEN_HOME/bin/mvn`） |
+| `MVN_SETTINGS` | (空) | Maven `settings.xml` 路径（等价于 `mvn --settings`） |
+| `MVN_REPO_LOCAL` | (空) | Maven 本地仓库（等价于 `-Dmaven.repo.local=...`） |
 | `PARALLEL_JOBS` | `8` | 并行搜索任务数 |
 | `JAR_LIST_CACHE_TTL` | `86400` | JAR 列表缓存有效期（秒） |
 | `MAX_LINES_DEFAULT` | `400` | 默认输出行数限制 |
 
+## 配置文件（全局/项目级默认值）
+
+- 全局：`~/.config/maven-source-viewer/config`
+- 项目级：`<项目根目录>/.maven-source-viewer.conf`（`--project` 会自动定位 Maven 根目录）
+
+仅支持白名单 KEY（示例）：
+
+```ini
+MAVEN_HOME=/Users/you/Environment/apache-maven-3.9.3
+MVN_SETTINGS=/Users/you/Environment/apache-maven-3.9.3/conf/settings.xml
+MVN_REPO_LOCAL=/Users/you/Environment/apache-maven-3.9.3/repository
+PARALLEL_JOBS=12
+```
+
 ## 反编译器
 
-默认使用 `javap`（JDK 自带），如需更好的反编译效果，可安装 CFR：
+默认优先尝试使用 IDEA 自带 Fernflower（若可定位到 `java-decompiler.jar`），否则回退到 `javap`（JDK 自带）。
+
+如需更好的反编译效果，也可安装 CFR：
 
 ```bash
 ~/.claude/skills/maven-source-viewer/scripts/maven-source.sh install-cfr
+
+# 优先通过 Maven 获取（更适合企业内网/镜像环境）
+~/.claude/skills/maven-source-viewer/scripts/maven-source.sh install-cfr --method maven
 ```
 
 ## 缓存位置

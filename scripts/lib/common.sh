@@ -14,6 +14,114 @@ MAX_LINES_DEFAULT="${MAX_LINES_DEFAULT:-400}"
 SOURCE_EXTS=(java kt kts groovy scala)
 
 # ============================================================================
+# 配置文件（全局/项目级）
+# ============================================================================
+
+# 配置优先级（从高到低）：
+# 1) 命令行参数（如 --mvn-settings / --mvn-repo-local）
+# 2) 环境变量（如 MVN_SETTINGS / MVN_REPO_LOCAL）
+# 3) 项目配置文件（默认 .maven-source-viewer.conf）
+# 4) 全局配置文件（默认 ~/.config/maven-source-viewer/config）
+#
+# 配置文件格式：
+# - 只支持 KEY=VALUE（忽略空行和以 # 开头的注释）
+# - 仅允许白名单中的 KEY，避免执行任意 shell 代码
+
+MSV_CONFIG_SET_VARS="${MSV_CONFIG_SET_VARS:-|}"
+
+msv__is_set_by_config() {
+  local var="$1"
+  [[ "$MSV_CONFIG_SET_VARS" == *"|${var}|"* ]]
+}
+
+msv__mark_set_by_config() {
+  local var="$1"
+  msv__is_set_by_config "$var" && return 0
+  MSV_CONFIG_SET_VARS="${MSV_CONFIG_SET_VARS}${var}|"
+}
+
+msv__set_config_var() {
+  local var="$1"
+  local val="$2"
+
+  # 不覆盖用户显式环境变量；允许“后加载的配置”覆盖“先加载的配置”
+  if [[ -z "${!var-}" ]] || msv__is_set_by_config "$var"; then
+    printf -v "$var" '%s' "$val"
+    export "$var"
+    msv__mark_set_by_config "$var"
+  fi
+}
+
+msv__apply_config_kv() {
+  local key="$1"
+  local val="$2"
+
+  case "$key" in
+    M2_REPO|CACHE_DIR|MAX_LINES_DEFAULT|PARALLEL_JOBS|JAR_LIST_CACHE_TTL|JAR_LIST_INCREMENTAL_INTERVAL)
+      msv__set_config_var "$key" "$val"
+      ;;
+    MVN_BIN|MAVEN_HOME|MVN_SETTINGS|MVN_REPO_LOCAL)
+      msv__set_config_var "$key" "$val"
+      ;;
+    CFR_JAR|FERNFLOWER_JAR|CFR_VERSION)
+      msv__set_config_var "$key" "$val"
+      ;;
+    *)
+      # 忽略未知 key
+      ;;
+  esac
+}
+
+msv_load_config_file() {
+  local file="$1"
+  [[ -f "$file" ]] || return 1
+
+  local line
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -z "$line" ]] && continue
+    [[ "$line" == \#* ]] && continue
+    [[ "$line" == *"="* ]] || continue
+
+    local key="${line%%=*}"
+    local val="${line#*=}"
+    key="$(printf "%s" "$key" | tr -d '[:space:]')"
+    val="$(printf "%s" "$val" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+
+    [[ -n "$key" ]] || continue
+    msv__apply_config_kv "$key" "$val"
+  done <"$file"
+}
+
+msv_global_config_file() {
+  if [[ -n "${MSV_GLOBAL_CONFIG:-}" ]]; then
+    echo "$MSV_GLOBAL_CONFIG"
+    return 0
+  fi
+  if [[ -n "${XDG_CONFIG_HOME:-}" ]]; then
+    echo "${XDG_CONFIG_HOME%/}/maven-source-viewer/config"
+  else
+    echo "${HOME%/}/.config/maven-source-viewer/config"
+  fi
+}
+
+msv_load_global_config() {
+  local file
+  file="$(msv_global_config_file)"
+  msv_load_config_file "$file" >/dev/null 2>&1 || true
+}
+
+msv_load_project_config() {
+  local project_dir="${1:-}"
+  [[ -n "$project_dir" && -d "$project_dir" ]] || return 1
+  local file="${project_dir%/}/.maven-source-viewer.conf"
+  msv_load_config_file "$file" >/dev/null 2>&1 || return 1
+  return 0
+}
+
+# 加载全局默认配置（如存在）
+msv_load_global_config
+
+# ============================================================================
 # 错误处理
 # ============================================================================
 
@@ -141,6 +249,7 @@ parse_project_args() {
   local decompiler="auto"
   local allow_decompile="1"
   local download_sources="0"
+  local allow_fallback="0"
   local all="0"
   local max_lines=""
   local verbose="0"
@@ -184,6 +293,10 @@ parse_project_args() {
         download_sources="1"
         shift
         ;;
+      --allow-fallback)
+        allow_fallback="1"
+        shift
+        ;;
       --all)
         all="1"
         shift
@@ -208,6 +321,13 @@ parse_project_args() {
     esac
   done
 
+  # 如果有 project_dir 且用户没有显式指定 search_path，尝试使用 IDEA 配置的本地仓库
+  if [[ -n "$project_dir" && "$search_path_explicit" == "0" ]]; then
+    # 需要先加载 IDEA Maven 配置（这里调用 maybe_load_idea_maven_settings）
+    # 由于 common.sh 在 maven.sh 之前加载，这里通过输出变量让调用方处理
+    :
+  fi
+
   cat <<EOF
 PARSED_PROJECT_DIR=$(printf '%q' "$project_dir")
 PARSED_CLASSPATH_FILE=$(printf '%q' "$classpath_file")
@@ -220,6 +340,7 @@ PARSED_SEARCH_PATH_EXPLICIT=$(printf '%q' "$search_path_explicit")
 PARSED_DECOMPILER=$(printf '%q' "$decompiler")
 PARSED_ALLOW_DECOMPILE=$(printf '%q' "$allow_decompile")
 PARSED_DOWNLOAD_SOURCES=$(printf '%q' "$download_sources")
+PARSED_ALLOW_FALLBACK=$(printf '%q' "$allow_fallback")
 PARSED_ALL=$(printf '%q' "$all")
 PARSED_MAX_LINES=$(printf '%q' "$max_lines")
 PARSED_VERBOSE=$(printf '%q' "$verbose")

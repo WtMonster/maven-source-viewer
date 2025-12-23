@@ -35,12 +35,12 @@ usage() {
 Maven Source Viewer - 查看 Maven 依赖的源码
 
 用法:
-  maven-source.sh find <class-fqn> [search-path] [--binary] [--limit-jars N] [--project DIR|--classpath-file FILE]
-  maven-source.sh search <pattern> [search-path] [--limit-matches N] [--project DIR|--classpath-file FILE]
+  maven-source.sh find <class-fqn> [search-path] [--binary] [--limit-jars N] [--project DIR|--classpath-file FILE] [--allow-fallback]
+  maven-source.sh search <pattern> [search-path] [--limit-matches N] [--project DIR|--classpath-file FILE] [--allow-fallback]
   maven-source.sh read <sources-jar> <class-fqn> [--all|--max-lines N]
-  maven-source.sh open <class-fqn> [search-path] [--all|--max-lines N] [--project DIR|--classpath-file FILE] [--download-sources] [--decompiler auto|cfr|fernflower|javap] [--no-decompile]
-  maven-source.sh fetch <class-fqn> <output-dir> [search-path] [--project DIR|--classpath-file FILE] [--download-sources] [--decompiler auto|cfr|fernflower|javap] [--no-decompile]
-  maven-source.sh decompile <class-fqn> [search-path] [--all|--max-lines N] [--project DIR|--classpath-file FILE] [--decompiler auto|cfr|fernflower|javap]
+  maven-source.sh open <class-fqn> [search-path] [--all|--max-lines N] [--project DIR|--classpath-file FILE] [--download-sources] [--decompiler auto|cfr|fernflower|javap] [--no-decompile] [--allow-fallback]
+  maven-source.sh fetch <class-fqn> <output-dir> [search-path] [--project DIR|--classpath-file FILE] [--download-sources] [--decompiler auto|cfr|fernflower|javap] [--no-decompile] [--allow-fallback]
+  maven-source.sh decompile <class-fqn> [search-path] [--all|--max-lines N] [--project DIR|--classpath-file FILE] [--decompiler auto|cfr|fernflower|javap] [--allow-fallback]
   maven-source.sh classpath <project-dir> [--output FILE] [--scope compile|test|runtime] [--offline]
   maven-source.sh list <project-dir>
   maven-source.sh download <project-dir>

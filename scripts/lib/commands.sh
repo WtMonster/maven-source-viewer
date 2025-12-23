@@ -20,6 +20,7 @@ cmd_find() {
   local mvn_offline="0"
   local mvn_settings=""
   local mvn_repo_local=""
+  local allow_fallback="0"
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -32,6 +33,7 @@ cmd_find() {
       --offline|--mvn-offline) mvn_offline="1"; shift ;;
       --mvn-settings) mvn_settings="${2:-}"; shift 2 ;;
       --mvn-repo-local) mvn_repo_local="${2:-}"; shift 2 ;;
+      --allow-fallback) allow_fallback="1"; shift ;;
       -*)
         die_with_hint "未知参数: $1" "使用 'maven-source.sh find --help' 查看帮助"
         ;;
@@ -50,11 +52,20 @@ cmd_find() {
   [[ -n "$class_fqn" ]] || die_with_hint "缺少类名参数" "用法: find <class-fqn> [--project DIR] [--binary]"
 
   local resolved_info binary_jars_file tmp_file_flag resolved_project_dir
-  resolved_info="$(resolve_binary_jars_file "$classpath_file" "$project_dir" "$scope" "$mvn_offline" "$mvn_settings" "$mvn_repo_local")"
+  resolved_info="$(resolve_binary_jars_file "$classpath_file" "$project_dir" "$scope" "$mvn_offline" "$mvn_settings" "$mvn_repo_local" "$allow_fallback")"
   binary_jars_file="$(printf "%s" "$resolved_info" | cut -f1)"
   tmp_file_flag="$(printf "%s" "$resolved_info" | cut -f2)"
   resolved_project_dir="$(printf "%s" "$resolved_info" | cut -f3)"
   [[ -n "$resolved_project_dir" ]] && project_dir="$resolved_project_dir"
+
+  [[ -n "$project_dir" ]] && msv_load_project_config "$project_dir" >/dev/null 2>&1 || true
+
+  if [[ -n "$project_dir" && "$search_path_explicit" == "0" ]]; then
+    maybe_load_idea_maven_settings "$project_dir"
+    if [[ -n "${IDEA_MVN_LOCAL_REPO:-}" && -d "${IDEA_MVN_LOCAL_REPO:-}" ]]; then
+      search_path="$IDEA_MVN_LOCAL_REPO"
+    fi
+  fi
 
   if [[ -n "$binary_jars_file" && -f "$binary_jars_file" ]]; then
     echo "正在搜索类: $class_fqn"
@@ -156,18 +167,30 @@ cmd_open() {
   local mvn_settings="$PARSED_MVN_SETTINGS"
   local mvn_repo_local="$PARSED_MVN_REPO_LOCAL"
   local search_path="$PARSED_SEARCH_PATH"
+  local search_path_explicit="$PARSED_SEARCH_PATH_EXPLICIT"
   local decompiler="$PARSED_DECOMPILER"
   local allow_decompile="$PARSED_ALLOW_DECOMPILE"
   local download_sources="$PARSED_DOWNLOAD_SOURCES"
+  local allow_fallback="$PARSED_ALLOW_FALLBACK"
   local all="$PARSED_ALL"
   local max_lines="$PARSED_MAX_LINES"
 
   local resolved_info binary_jars_file tmp_file_flag resolved_project_dir
-  resolved_info="$(resolve_binary_jars_file "$classpath_file" "$project_dir" "$scope" "$mvn_offline" "$mvn_settings" "$mvn_repo_local")"
+  resolved_info="$(resolve_binary_jars_file "$classpath_file" "$project_dir" "$scope" "$mvn_offline" "$mvn_settings" "$mvn_repo_local" "$allow_fallback")"
   binary_jars_file="$(printf "%s" "$resolved_info" | cut -f1)"
   tmp_file_flag="$(printf "%s" "$resolved_info" | cut -f2)"
   resolved_project_dir="$(printf "%s" "$resolved_info" | cut -f3)"
   [[ -n "$resolved_project_dir" ]] && project_dir="$resolved_project_dir"
+
+  [[ -n "$project_dir" ]] && msv_load_project_config "$project_dir" >/dev/null 2>&1 || true
+
+  # 如果用户没显式指定 search_path，则优先复用 IDEA 的本地仓库路径（避免 ~/.m2/repository 与实际不一致）
+  if [[ -n "$project_dir" && "$search_path_explicit" == "0" ]]; then
+    maybe_load_idea_maven_settings "$project_dir"
+    if [[ -n "${IDEA_MVN_LOCAL_REPO:-}" && -d "${IDEA_MVN_LOCAL_REPO:-}" ]]; then
+      search_path="$IDEA_MVN_LOCAL_REPO"
+    fi
+  fi
 
   local class_info result_type jar entry source_jar source_entry
   class_info="$(resolve_class_location "$class_fqn" "$binary_jars_file" "$project_dir" "$scope" "$mvn_offline" "$mvn_settings" "$mvn_repo_local" "$search_path" "$download_sources" 2>/dev/null || echo "not_found")"
@@ -227,16 +250,27 @@ cmd_fetch() {
   local mvn_settings="$PARSED_MVN_SETTINGS"
   local mvn_repo_local="$PARSED_MVN_REPO_LOCAL"
   local search_path="$PARSED_SEARCH_PATH"
+  local search_path_explicit="$PARSED_SEARCH_PATH_EXPLICIT"
   local decompiler="$PARSED_DECOMPILER"
   local allow_decompile="$PARSED_ALLOW_DECOMPILE"
   local download_sources="$PARSED_DOWNLOAD_SOURCES"
+  local allow_fallback="$PARSED_ALLOW_FALLBACK"
 
   local resolved_info binary_jars_file tmp_file_flag resolved_project_dir
-  resolved_info="$(resolve_binary_jars_file "$classpath_file" "$project_dir" "$scope" "$mvn_offline" "$mvn_settings" "$mvn_repo_local")"
+  resolved_info="$(resolve_binary_jars_file "$classpath_file" "$project_dir" "$scope" "$mvn_offline" "$mvn_settings" "$mvn_repo_local" "$allow_fallback")"
   binary_jars_file="$(printf "%s" "$resolved_info" | cut -f1)"
   tmp_file_flag="$(printf "%s" "$resolved_info" | cut -f2)"
   resolved_project_dir="$(printf "%s" "$resolved_info" | cut -f3)"
   [[ -n "$resolved_project_dir" ]] && project_dir="$resolved_project_dir"
+
+  [[ -n "$project_dir" ]] && msv_load_project_config "$project_dir" >/dev/null 2>&1 || true
+
+  if [[ -n "$project_dir" && "$search_path_explicit" == "0" ]]; then
+    maybe_load_idea_maven_settings "$project_dir"
+    if [[ -n "${IDEA_MVN_LOCAL_REPO:-}" && -d "${IDEA_MVN_LOCAL_REPO:-}" ]]; then
+      search_path="$IDEA_MVN_LOCAL_REPO"
+    fi
+  fi
 
   local class_info result_type jar entry source_jar source_entry
   class_info="$(resolve_class_location "$class_fqn" "$binary_jars_file" "$project_dir" "$scope" "$mvn_offline" "$mvn_settings" "$mvn_repo_local" "$search_path" "$download_sources" 2>/dev/null || echo "not_found")"
@@ -304,6 +338,8 @@ cmd_search() {
   local mvn_settings="$PARSED_MVN_SETTINGS"
   local mvn_repo_local="$PARSED_MVN_REPO_LOCAL"
   local search_path="$PARSED_SEARCH_PATH"
+  local search_path_explicit="$PARSED_SEARCH_PATH_EXPLICIT"
+  local allow_fallback="$PARSED_ALLOW_FALLBACK"
   local limit_matches="5"
 
   for arg in "${PARSED_REMAINING_ARGS[@]:-}"; do
@@ -316,9 +352,21 @@ cmd_search() {
   echo "---"
 
   local resolved_info binary_jars_file tmp_file_flag
-  resolved_info="$(resolve_binary_jars_file "$classpath_file" "$project_dir" "$scope" "$mvn_offline" "$mvn_settings" "$mvn_repo_local")"
+  resolved_info="$(resolve_binary_jars_file "$classpath_file" "$project_dir" "$scope" "$mvn_offline" "$mvn_settings" "$mvn_repo_local" "$allow_fallback")"
   binary_jars_file="$(printf "%s" "$resolved_info" | cut -f1)"
   tmp_file_flag="$(printf "%s" "$resolved_info" | cut -f2)"
+  local resolved_project_dir
+  resolved_project_dir="$(printf "%s" "$resolved_info" | cut -f3)"
+  [[ -n "$resolved_project_dir" ]] && project_dir="$resolved_project_dir"
+
+  [[ -n "$project_dir" ]] && msv_load_project_config "$project_dir" >/dev/null 2>&1 || true
+
+  if [[ -n "$project_dir" && "$search_path_explicit" == "0" ]]; then
+    maybe_load_idea_maven_settings "$project_dir"
+    if [[ -n "${IDEA_MVN_LOCAL_REPO:-}" && -d "${IDEA_MVN_LOCAL_REPO:-}" ]]; then
+      search_path="$IDEA_MVN_LOCAL_REPO"
+    fi
+  fi
 
   local count=0 jar
   if [[ -n "$binary_jars_file" && -f "$binary_jars_file" ]]; then
@@ -405,16 +453,27 @@ cmd_decompile() {
   local mvn_settings="$PARSED_MVN_SETTINGS"
   local mvn_repo_local="$PARSED_MVN_REPO_LOCAL"
   local search_path="$PARSED_SEARCH_PATH"
+  local search_path_explicit="$PARSED_SEARCH_PATH_EXPLICIT"
   local decompiler="$PARSED_DECOMPILER"
+  local allow_fallback="$PARSED_ALLOW_FALLBACK"
   local all="$PARSED_ALL"
   local max_lines="$PARSED_MAX_LINES"
 
   local resolved_info binary_jars_file tmp_file_flag resolved_project_dir
-  resolved_info="$(resolve_binary_jars_file "$classpath_file" "$project_dir" "$scope" "$mvn_offline" "$mvn_settings" "$mvn_repo_local")"
+  resolved_info="$(resolve_binary_jars_file "$classpath_file" "$project_dir" "$scope" "$mvn_offline" "$mvn_settings" "$mvn_repo_local" "$allow_fallback")"
   binary_jars_file="$(printf "%s" "$resolved_info" | cut -f1)"
   tmp_file_flag="$(printf "%s" "$resolved_info" | cut -f2)"
   resolved_project_dir="$(printf "%s" "$resolved_info" | cut -f3)"
   [[ -n "$resolved_project_dir" ]] && project_dir="$resolved_project_dir"
+
+  [[ -n "$project_dir" ]] && msv_load_project_config "$project_dir" >/dev/null 2>&1 || true
+
+  if [[ -n "$project_dir" && "$search_path_explicit" == "0" ]]; then
+    maybe_load_idea_maven_settings "$project_dir"
+    if [[ -n "${IDEA_MVN_LOCAL_REPO:-}" && -d "${IDEA_MVN_LOCAL_REPO:-}" ]]; then
+      search_path="$IDEA_MVN_LOCAL_REPO"
+    fi
+  fi
 
   local jar entry bin_resolved=""
   if [[ -n "$binary_jars_file" && -f "$binary_jars_file" ]]; then
@@ -454,6 +513,11 @@ cmd_classpath() {
   local project_dir="${1:-}"
   shift 1 || true
   [[ -n "$project_dir" ]] || die_with_hint "缺少项目目录" "用法: classpath <project-dir> [--output FILE]"
+
+  local resolved_project_dir=""
+  resolved_project_dir="$(resolve_project_dir "$project_dir" 2>/dev/null || true)"
+  [[ -n "$resolved_project_dir" ]] && project_dir="$resolved_project_dir"
+  [[ -n "$project_dir" ]] && msv_load_project_config "$project_dir" >/dev/null 2>&1 || true
 
   local output="" scope="compile" offline="0"
   while [[ $# -gt 0 ]]; do
@@ -517,6 +581,11 @@ cmd_list() {
   local project_dir="${1:-}"
   [[ -n "$project_dir" ]] || die_with_hint "缺少项目目录" "用法: list <project-dir>"
 
+  local resolved_project_dir=""
+  resolved_project_dir="$(resolve_project_dir "$project_dir" 2>/dev/null || true)"
+  [[ -n "$resolved_project_dir" ]] && project_dir="$resolved_project_dir"
+  [[ -n "$project_dir" ]] && msv_load_project_config "$project_dir" >/dev/null 2>&1 || true
+
   run_mvn_local "$project_dir" dependency:list -DoutputAbsoluteArtifactFilename=true
 }
 
@@ -527,6 +596,11 @@ cmd_list() {
 cmd_download() {
   local project_dir="${1:-}"
   [[ -n "$project_dir" ]] || die_with_hint "缺少项目目录" "用法: download <project-dir>"
+
+  local resolved_project_dir=""
+  resolved_project_dir="$(resolve_project_dir "$project_dir" 2>/dev/null || true)"
+  [[ -n "$resolved_project_dir" ]] && project_dir="$resolved_project_dir"
+  [[ -n "$project_dir" ]] && msv_load_project_config "$project_dir" >/dev/null 2>&1 || true
 
   echo "正在下载项目依赖的源码..."
   run_mvn_local "$project_dir" dependency:sources -Dsilent=true || warn "部分源码下载失败"

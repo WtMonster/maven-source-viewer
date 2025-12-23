@@ -55,7 +55,22 @@ xml_option_value_in_maven_import_preferences() {
   local option_name="$2"
   [[ -f "$xml_file" ]] || return 1
 
-  sed -n '/<component name="MavenImportPreferences">/,/<\/component>/p' "$xml_file" 2>/dev/null | \
+  local component_content
+  component_content="$(sed -n '/<component name="MavenImportPreferences">/,/<\/component>/p' "$xml_file" 2>/dev/null)"
+  [[ -n "$component_content" ]] || return 1
+
+  # 优先尝试从 MavenGeneralSettings 嵌套结构中提取（新版 IDEA 格式）
+  local nested_val
+  nested_val="$(echo "$component_content" | \
+    sed -n '/<MavenGeneralSettings>/,/<\/MavenGeneralSettings>/p' 2>/dev/null | \
+    sed -n -E "s/.*<option name=\"${option_name}\" value=\"([^\"]*)\".*/\\1/p" | head -n 1)"
+  if [[ -n "$nested_val" ]]; then
+    echo "$nested_val"
+    return 0
+  fi
+
+  # 回退到直接结构（旧版 IDEA 格式）
+  echo "$component_content" | \
     sed -n -E "s/.*<option name=\"${option_name}\" value=\"([^\"]*)\".*/\\1/p" | head -n 1
 }
 
@@ -91,6 +106,29 @@ jetbrains_default_project_xml() {
 
   [[ -n "$best" ]] || return 1
   echo "$best"
+}
+
+# 从 IDEA 项目配置中解析 Maven 根 pom.xml（最接近 IDE 实际导入的 Maven 项目）
+resolve_idea_maven_root_pom() {
+  local hint="${1:-}"
+  local idea_project_dir=""
+  idea_project_dir="$(resolve_idea_project_dir "$hint" 2>/dev/null || true)"
+  [[ -n "$idea_project_dir" ]] || return 1
+
+  local misc="${idea_project_dir%/}/.idea/misc.xml"
+  [[ -f "$misc" ]] || return 1
+
+  local component_content
+  component_content="$(sed -n '/<component name="MavenProjectsManager">/,/<\/component>/p' "$misc" 2>/dev/null)"
+  [[ -n "$component_content" ]] || return 1
+
+  local pom_path
+  pom_path="$(printf "%s\n" "$component_content" | sed -n -E 's/.*<option value="([^"]*pom\.xml)".*/\1/p' | head -n 1)"
+  [[ -n "$pom_path" ]] || return 1
+
+  pom_path="$(expand_idea_path "$pom_path" "$idea_project_dir")"
+  [[ -f "$pom_path" ]] || return 1
+  echo "$pom_path"
 }
 
 maybe_load_idea_maven_settings() {
@@ -251,6 +289,173 @@ try_get_idea_libraries_classpath() {
 }
 
 # ============================================================================
+# IDEA 系统缓存读取（external_build_system）
+# ============================================================================
+
+# 查找项目对应的 IDEA 系统缓存目录
+find_idea_system_cache_dir() {
+  local project_dir="$1"
+  [[ -n "$project_dir" ]] || return 1
+
+  local base=""
+  case "$(uname -s 2>/dev/null || echo unknown)" in
+    Darwin)
+      base="${HOME%/}/Library/Caches/JetBrains"
+      ;;
+    Linux)
+      base="${HOME%/}/.cache/JetBrains"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+  [[ -d "$base" ]] || return 1
+
+  # 获取项目目录名和父目录名（IDEA 可能使用任一个）
+  local project_name
+  project_name="$(basename "$project_dir")"
+  local parent_name
+  parent_name="$(basename "$(dirname "$project_dir")")"
+
+  # 查找最新的 IntelliJ IDEA 缓存目录
+  local idea_cache=""
+  local idea_version=""
+  local dir
+  while IFS= read -r dir; do
+    [[ -d "$dir" ]] || continue
+    local ver="${dir##*/}"
+    if [[ "$ver" == IntelliJIdea* ]]; then
+      if [[ -z "$idea_version" || "$ver" > "$idea_version" ]]; then
+        idea_version="$ver"
+        idea_cache="$dir"
+      fi
+    fi
+  done < <(find "$base" -maxdepth 1 -type d -name "IntelliJIdea*" 2>/dev/null)
+
+  [[ -n "$idea_cache" ]] || return 1
+
+  # 在 projects 目录下查找匹配的项目缓存
+  local projects_dir="${idea_cache}/projects"
+  [[ -d "$projects_dir" ]] || return 1
+
+  local best_match=""
+  local best_mtime="0"
+  while IFS= read -r dir; do
+    [[ -d "$dir" ]] || continue
+    local dirname="${dir##*/}"
+    # 项目缓存目录格式: project_name.hash 或 project_name
+    # 尝试匹配项目目录名或父目录名
+    if [[ "$dirname" == "${project_name}."* || "$dirname" == "$project_name" || \
+          "$dirname" == "${parent_name}."* || "$dirname" == "$parent_name" ]]; then
+      local modules_dir="${dir}/external_build_system/modules"
+      if [[ -d "$modules_dir" ]]; then
+        local mtime
+        mtime="$(file_mtime "$modules_dir" 2>/dev/null || echo 0)"
+        if [[ "$mtime" -gt "$best_mtime" ]]; then
+          best_mtime="$mtime"
+          best_match="$dir"
+        fi
+      fi
+    fi
+  done < <(find "$projects_dir" -maxdepth 1 -type d 2>/dev/null)
+
+  [[ -n "$best_match" ]] || return 1
+  echo "$best_match"
+}
+
+# 从 IDEA 系统缓存的模块 XML 中提取 Maven 依赖
+parse_idea_module_cache_xml() {
+  local xml_file="$1"
+  local repo_local="$2"
+  [[ -f "$xml_file" && -n "$repo_local" ]] || return 1
+
+  # 提取 <orderEntry type="library" name="Maven: groupId:artifactId:version" ...>
+  grep -oE 'name="Maven: [^"]+' "$xml_file" 2>/dev/null | \
+    sed 's/^name="Maven: //' | \
+    while read -r gav; do
+      # GAV 格式: groupId:artifactId:version 或 groupId:artifactId:packaging:version 或 groupId:artifactId:packaging:classifier:version
+      local groupId artifactId version packaging classifier
+
+      # 使用 awk 分割字符串（兼容 bash 和 zsh）
+      local num_parts
+      num_parts="$(echo "$gav" | awk -F: '{print NF}')"
+
+      if [[ "$num_parts" -eq 3 ]]; then
+        # groupId:artifactId:version
+        groupId="$(echo "$gav" | cut -d: -f1)"
+        artifactId="$(echo "$gav" | cut -d: -f2)"
+        version="$(echo "$gav" | cut -d: -f3)"
+        packaging="jar"
+        classifier=""
+      elif [[ "$num_parts" -eq 4 ]]; then
+        # groupId:artifactId:packaging:version
+        groupId="$(echo "$gav" | cut -d: -f1)"
+        artifactId="$(echo "$gav" | cut -d: -f2)"
+        packaging="$(echo "$gav" | cut -d: -f3)"
+        version="$(echo "$gav" | cut -d: -f4)"
+        classifier=""
+      elif [[ "$num_parts" -ge 5 ]]; then
+        # groupId:artifactId:packaging:classifier:version
+        groupId="$(echo "$gav" | cut -d: -f1)"
+        artifactId="$(echo "$gav" | cut -d: -f2)"
+        packaging="$(echo "$gav" | cut -d: -f3)"
+        classifier="$(echo "$gav" | cut -d: -f4)"
+        version="$(echo "$gav" | cut -d: -f5)"
+      else
+        continue
+      fi
+
+      # 跳过 pom 类型
+      [[ "$packaging" == "pom" ]] && continue
+
+      # 构建 JAR 路径（使用 tr 替换，避免 zsh 转义问题）
+      local group_path
+      group_path="$(echo "$groupId" | tr '.' '/')"
+      local jar_name="${artifactId}-${version}"
+      [[ -n "$classifier" ]] && jar_name="${jar_name}-${classifier}"
+      jar_name="${jar_name}.${packaging:-jar}"
+
+      local jar_path="${repo_local}/${group_path}/${artifactId}/${version}/${jar_name}"
+      [[ -f "$jar_path" ]] && echo "$jar_path"
+    done
+}
+
+# 从 IDEA 系统缓存获取项目的所有依赖 JAR
+get_idea_system_cache_jars() {
+  local project_dir="$1"
+  local repo_local="$2"
+
+  local cache_dir
+  cache_dir="$(find_idea_system_cache_dir "$project_dir" 2>/dev/null || true)"
+  [[ -n "$cache_dir" ]] || return 1
+
+  local modules_dir="${cache_dir}/external_build_system/modules"
+  [[ -d "$modules_dir" ]] || return 1
+
+  local xml_file
+  find "$modules_dir" -maxdepth 1 -name "*.xml" -type f 2>/dev/null | while read -r xml_file; do
+    parse_idea_module_cache_xml "$xml_file" "$repo_local"
+  done | sort -u
+}
+
+# 尝试从 IDEA 系统缓存获取 classpath
+try_get_idea_system_cache_classpath() {
+  local project_dir="$1"
+  local out_file="$2"
+
+  maybe_load_idea_maven_settings "$project_dir"
+  local repo_local="${IDEA_MVN_LOCAL_REPO:-$M2_REPO}"
+  [[ -d "$repo_local" ]] || return 1
+
+  local jars
+  jars="$(get_idea_system_cache_jars "$project_dir" "$repo_local" 2>/dev/null || true)"
+  [[ -n "$jars" ]] || return 1
+
+  echo "$jars" > "$out_file"
+  return 0
+}
+
+# ============================================================================
 # Maven 命令执行
 # ============================================================================
 
@@ -290,10 +495,12 @@ mvn_repo_local_path() {
 }
 
 run_mvn_local() {
-  local project_dir="$1"
+  local project_input="$1"
   shift
 
-  [[ -f "$project_dir/pom.xml" ]] || die "未找到 pom.xml: $project_dir/pom.xml"
+  local project_dir=""
+  project_dir="$(resolve_project_dir "$project_input" 2>/dev/null || true)"
+  [[ -n "$project_dir" && -f "$project_dir/pom.xml" ]] || die "未找到 pom.xml: ${project_input}"
 
   maybe_load_idea_maven_settings "$project_dir"
 
@@ -355,6 +562,13 @@ resolve_project_dir() {
     dir="$(dirname "$dir")"
   fi
   [[ -d "$dir" ]] || return 1
+
+  local idea_root_pom=""
+  idea_root_pom="$(resolve_idea_maven_root_pom "$dir" 2>/dev/null || true)"
+  if [[ -n "$idea_root_pom" ]]; then
+    echo "$(dirname "$idea_root_pom")"
+    return 0
+  fi
 
   if [[ -f "$dir/pom.xml" ]]; then
     echo "$dir"
@@ -523,6 +737,16 @@ get_project_classpath_file() {
   fi
   rm -f "$idea_tmp" >/dev/null 2>&1 || true
 
+  # 快速路径 2：尝试从 IDEA 系统缓存获取（external_build_system）
+  idea_tmp="$(mktemp "${TMP_DIR%/}/idea-cache-classpath.XXXXXX")"
+  if try_get_idea_system_cache_classpath "$project_dir" "$idea_tmp" 2>/dev/null; then
+    # IDEA 系统缓存成功，直接使用
+    mv "$idea_tmp" "$out_file"
+    echo "$out_file"
+    return 0
+  fi
+  rm -f "$idea_tmp" >/dev/null 2>&1 || true
+
   # 慢速路径：调用 Maven
   local tmp_cp
   tmp_cp="$(mktemp "${TMP_DIR%/}/maven-classpath.XXXXXX")"
@@ -632,6 +856,7 @@ resolve_binary_jars_file() {
   local mvn_offline="$4"
   local mvn_settings="$5"
   local mvn_repo_local="$6"
+  local allow_fallback="${7:-0}"
 
   local binary_jars_file=""
   local tmp_file_flag="0"
@@ -653,6 +878,11 @@ resolve_binary_jars_file() {
   elif [[ -n "$project_dir" ]]; then
     resolved_project_dir="$(resolve_project_dir "$project_dir" 2>/dev/null || true)"
     if [[ -z "$resolved_project_dir" ]]; then
+      if [[ "$allow_fallback" != "1" ]]; then
+        die_with_hint "未能定位 pom.xml: $project_dir" \
+          "为避免扫描整个本地仓库已终止；请指定正确的 Maven 项目目录，或使用 --allow-fallback 允许回退扫描 target/仓库"
+      fi
+
       local target_jars
       target_jars="$(get_project_target_jars_file "$project_dir" 2>/dev/null || true)"
       if [[ -n "$target_jars" && -f "$target_jars" ]]; then
@@ -660,15 +890,28 @@ resolve_binary_jars_file() {
         binary_jars_file="$target_jars"
         tmp_file_flag="1"
       fi
-    elif binary_jars_file="$(get_project_classpath_file "$resolved_project_dir" "$scope" "$mvn_offline" "$mvn_settings" "$mvn_repo_local" 2>/dev/null)"; then
-      tmp_file_flag="0"
     else
-      local target_jars
-      target_jars="$(get_project_target_jars_file "$resolved_project_dir" 2>/dev/null || true)"
-      if [[ -n "$target_jars" && -f "$target_jars" ]]; then
-        warn "Maven 解析失败，改用项目 target 目录中的依赖 JAR"
-        binary_jars_file="$target_jars"
-        tmp_file_flag="1"
+      if binary_jars_file="$(get_project_classpath_file "$resolved_project_dir" "$scope" "$mvn_offline" "$mvn_settings" "$mvn_repo_local")"; then
+        tmp_file_flag="0"
+      else
+        if [[ "$allow_fallback" != "1" ]]; then
+          die_with_hint "Maven 生成项目 classpath 失败: $resolved_project_dir" \
+            "为避免扫描整个本地仓库已终止；请修复 Maven 依赖/仓库/设置后重试，或使用 --allow-fallback 允许回退扫描 target/仓库"
+        fi
+
+        local target_jars
+        target_jars="$(get_project_target_jars_file "$resolved_project_dir" 2>/dev/null || true)"
+        if [[ -n "$target_jars" && -f "$target_jars" ]]; then
+          # 加载 IDEA 配置，以便后续 search_path 能使用正确的本地仓库
+          maybe_load_idea_maven_settings "$resolved_project_dir"
+          if [[ -n "${IDEA_MVN_LOCAL_REPO:-}" ]]; then
+            warn "Maven 解析失败，改用 target 目录 + IDEA 本地仓库回退搜索"
+          else
+            warn "Maven 解析失败，改用项目 target 目录中的依赖 JAR"
+          fi
+          binary_jars_file="$target_jars"
+          tmp_file_flag="1"
+        fi
       fi
     fi
   fi

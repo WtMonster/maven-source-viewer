@@ -102,19 +102,14 @@ join_jars_classpath() {
 # 增量更新 JAR 列表
 # ============================================================================
 
-# 获取目录的最新修改时间（递归检查子目录）
-_get_dir_newest_mtime() {
-  local dir="$1"
-  local max_depth="${2:-3}"
-
-  # 只检查目录的 mtime，不检查文件（更快）
-  find "$dir" -maxdepth "$max_depth" -type d -newer "$dir" 2>/dev/null | head -n1
+_jar_list_stamp_file() {
+  local list_file="$1"
+  echo "${list_file}.stamp"
 }
 
 # 检查是否需要完整扫描
 _needs_full_scan() {
   local list_file="$1"
-  local search_path="$2"
 
   # 缓存文件不存在，需要完整扫描
   [[ -f "$list_file" ]] || return 0
@@ -129,14 +124,20 @@ _needs_full_scan() {
   # 超过 TTL，需要完整扫描
   ((age >= JAR_LIST_CACHE_TTL)) && return 0
 
-  # 在增量检查间隔内，不需要扫描
-  ((age < JAR_LIST_INCREMENTAL_INTERVAL)) && return 1
+  return 1
+}
 
-  # 检查是否有新目录被创建（快速检查）
-  if [[ -n "$(_get_dir_newest_mtime "$search_path" 3)" ]]; then
-    return 0
-  fi
+_should_run_incremental_scan() {
+  local stamp_file="$1"
 
+  # stamp 不存在，执行一次增量扫描
+  [[ -f "$stamp_file" ]] || return 0
+
+  local stamp_mtime now age
+  stamp_mtime="$(file_mtime "$stamp_file" 2>/dev/null || echo 0)"
+  now="$(date +%s 2>/dev/null || echo 0)"
+  age=$((now - stamp_mtime))
+  ((age >= JAR_LIST_INCREMENTAL_INTERVAL)) && return 0
   return 1
 }
 
@@ -148,9 +149,6 @@ _incremental_update_jar_list() {
 
   [[ -f "$list_file" ]] || return 1
 
-  local list_mtime
-  list_mtime="$(file_mtime "$list_file" 2>/dev/null || echo 0)"
-
   # 查找比缓存文件更新的 JAR
   local new_jars
   new_jars="$(find "$search_path" -type f -name "$pattern" -newer "$list_file" 2>/dev/null || true)"
@@ -160,11 +158,6 @@ _incremental_update_jar_list() {
     echo "$new_jars" >> "$list_file"
     # 重新排序去重
     LC_ALL=C sort -u "$list_file" -o "$list_file"
-    # 更新缓存文件时间戳
-    touch "$list_file"
-  else
-    # 没有新文件，只更新时间戳避免频繁检查
-    touch "$list_file"
   fi
 }
 
@@ -173,14 +166,17 @@ list_source_jars() {
   [[ -d "$search_path" ]] || return 1
 
   local list_file="${LIST_DIR%/}/sources-$(hash_string "$search_path").list"
+  local stamp_file
+  stamp_file="$(_jar_list_stamp_file "$list_file")"
 
-  if _needs_full_scan "$list_file" "$search_path"; then
+  if _needs_full_scan "$list_file"; then
     # 完整扫描
     find "$search_path" -type f -name "*-sources.jar" 2>/dev/null | LC_ALL=C sort >"${list_file}.tmp" || true
     mv "${list_file}.tmp" "$list_file" 2>/dev/null || true
-  else
-    # 尝试增量更新
+    touch "$stamp_file" 2>/dev/null || true
+  elif _should_run_incremental_scan "$stamp_file"; then
     _incremental_update_jar_list "$list_file" "$search_path" "*-sources.jar" 2>/dev/null || true
+    touch "$stamp_file" 2>/dev/null || true
   fi
 
   cat "$list_file"
@@ -191,20 +187,22 @@ list_binary_jars() {
   [[ -d "$search_path" ]] || return 1
 
   local list_file="${LIST_DIR%/}/binary-$(hash_string "$search_path").list"
+  local stamp_file
+  stamp_file="$(_jar_list_stamp_file "$list_file")"
 
-  if _needs_full_scan "$list_file" "$search_path"; then
+  if _needs_full_scan "$list_file"; then
     # 完整扫描
     find "$search_path" -type f -name "*.jar" ! -name "*-sources.jar" ! -name "*-javadoc.jar" 2>/dev/null | LC_ALL=C sort >"${list_file}.tmp" || true
     mv "${list_file}.tmp" "$list_file" 2>/dev/null || true
-  else
-    # 尝试增量更新（排除 sources 和 javadoc）
+    touch "$stamp_file" 2>/dev/null || true
+  elif _should_run_incremental_scan "$stamp_file"; then
     local new_jars
     new_jars="$(find "$search_path" -type f -name "*.jar" ! -name "*-sources.jar" ! -name "*-javadoc.jar" -newer "$list_file" 2>/dev/null || true)"
     if [[ -n "$new_jars" ]]; then
       echo "$new_jars" >> "$list_file"
       LC_ALL=C sort -u "$list_file" -o "$list_file"
     fi
-    touch "$list_file"
+    touch "$stamp_file" 2>/dev/null || true
   fi
 
   cat "$list_file"
@@ -233,11 +231,12 @@ ensure_zip_index() {
     return 0
   fi
 
-  unzip -Z1 "$jar" >"${idx}.tmp" 2>/dev/null || {
-    rm -f "${idx}.tmp" >/dev/null 2>&1 || true
+  local tmp="${idx}.tmp.$$"
+  unzip -Z1 "$jar" >"$tmp" 2>/dev/null || {
+    rm -f "$tmp" >/dev/null 2>&1 || true
     return 1
   }
-  mv "${idx}.tmp" "$idx"
+  mv "$tmp" "$idx" 2>/dev/null || rm -f "$tmp" >/dev/null 2>&1 || true
   echo "$idx"
 }
 

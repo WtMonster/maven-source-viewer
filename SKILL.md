@@ -165,9 +165,14 @@ $SCRIPT download /path/to/project
 
 **现象**：输出的是 `javap` 反汇编（字节码），不是 Java 代码
 
+**说明**：脚本会尝试自动复用 IDEA 自带 Fernflower；若未找到则回退到 `javap`。
+
 **解决方案**：安装 CFR 反编译器
 ```bash
 $SCRIPT install-cfr
+
+# 更适合企业镜像/内网：优先通过 Maven 获取
+$SCRIPT install-cfr --method maven
 ```
 
 ---
@@ -210,4 +215,7 @@ $SCRIPT extract /path/to/xxx-sources.jar /tmp/extracted
 - **默认输出行数**：400 行，需要完整源码请加 `--all`
 - **缓存位置**：`~/.cache/maven-source-viewer/`（JAR 索引、classpath 缓存等）
 - **Maven 仓库**：默认 `~/.m2/repository`，可通过 `M2_REPO` 环境变量覆盖
+- **配置文件**：
+  - 全局：`~/.config/maven-source-viewer/config`
+  - 项目级：`<项目根目录>/.maven-source-viewer.conf`
 - **IDEA 配置**：加 `--project` 时会自动读取 IDEA 的 Maven 配置（settings.xml、localRepository 等）

@@ -51,7 +51,8 @@ resolve_source_first() {
     hash="$(printf "%s" "${jar}|${mtime}|${size}" | shasum -a 256 2>/dev/null | cut -d" " -f1 || printf "%s" "${jar}|${mtime}|${size}" | sha256sum 2>/dev/null | cut -d" " -f1)"
     idx="${INDEX_DIR}/${hash}.idx"
     if [[ ! -f "$idx" ]]; then
-      unzip -Z1 "$jar" >"${idx}.tmp" 2>/dev/null && mv "${idx}.tmp" "$idx" || exit 0
+      tmp="${idx}.tmp.$$"
+      unzip -Z1 "$jar" >"$tmp" 2>/dev/null && mv "$tmp" "$idx" || exit 0
     fi
     match="$(echo "$candidates" | grep -F -x -m1 -f /dev/stdin "$idx" 2>/dev/null || true)"
     if [[ -n "$match" ]]; then
@@ -82,7 +83,8 @@ resolve_source_all() {
     hash="$(printf "%s" "${jar}|${mtime}|${size}" | shasum -a 256 2>/dev/null | cut -d" " -f1 || printf "%s" "${jar}|${mtime}|${size}" | sha256sum 2>/dev/null | cut -d" " -f1)"
     idx="${INDEX_DIR}/${hash}.idx"
     if [[ ! -f "$idx" ]]; then
-      unzip -Z1 "$jar" >"${idx}.tmp" 2>/dev/null && mv "${idx}.tmp" "$idx" || exit 0
+      tmp="${idx}.tmp.$$"
+      unzip -Z1 "$jar" >"$tmp" 2>/dev/null && mv "$tmp" "$idx" || exit 0
     fi
     match="$(echo "$candidates" | grep -F -x -m1 -f /dev/stdin "$idx" 2>/dev/null || true)"
     if [[ -n "$match" ]]; then
@@ -111,7 +113,8 @@ resolve_source_first_in_jars_file() {
     hash="$(printf "%s" "${jar}|${mtime}|${size}" | shasum -a 256 2>/dev/null | cut -d" " -f1 || printf "%s" "${jar}|${mtime}|${size}" | sha256sum 2>/dev/null | cut -d" " -f1)"
     idx="${INDEX_DIR}/${hash}.idx"
     if [[ ! -f "$idx" ]]; then
-      unzip -Z1 "$jar" >"${idx}.tmp" 2>/dev/null && mv "${idx}.tmp" "$idx" || exit 0
+      tmp="${idx}.tmp.$$"
+      unzip -Z1 "$jar" >"$tmp" 2>/dev/null && mv "$tmp" "$idx" || exit 0
     fi
     match="$(echo "$candidates" | grep -F -x -m1 -f /dev/stdin "$idx" 2>/dev/null || true)"
     if [[ -n "$match" ]]; then
@@ -147,7 +150,8 @@ resolve_class_first() {
     hash="$(printf "%s" "${jar}|${mtime}|${size}" | shasum -a 256 2>/dev/null | cut -d" " -f1 || printf "%s" "${jar}|${mtime}|${size}" | sha256sum 2>/dev/null | cut -d" " -f1)"
     idx="${INDEX_DIR}/${hash}.idx"
     if [[ ! -f "$idx" ]]; then
-      unzip -Z1 "$jar" >"${idx}.tmp" 2>/dev/null && mv "${idx}.tmp" "$idx" || exit 0
+      tmp="${idx}.tmp.$$"
+      unzip -Z1 "$jar" >"$tmp" 2>/dev/null && mv "$tmp" "$idx" || exit 0
     fi
     match="$(echo "$candidates" | grep -F -x -m1 -f /dev/stdin "$idx" 2>/dev/null || true)"
     if [[ -n "$match" ]]; then
@@ -180,7 +184,8 @@ resolve_class_first_in_jars_file() {
     hash="$(printf "%s" "${jar}|${mtime}|${size}" | shasum -a 256 2>/dev/null | cut -d" " -f1 || printf "%s" "${jar}|${mtime}|${size}" | sha256sum 2>/dev/null | cut -d" " -f1)"
     idx="${INDEX_DIR}/${hash}.idx"
     if [[ ! -f "$idx" ]]; then
-      unzip -Z1 "$jar" >"${idx}.tmp" 2>/dev/null && mv "${idx}.tmp" "$idx" || exit 0
+      tmp="${idx}.tmp.$$"
+      unzip -Z1 "$jar" >"$tmp" 2>/dev/null && mv "$tmp" "$idx" || exit 0
     fi
     match="$(echo "$candidates" | grep -F -x -m1 -f /dev/stdin "$idx" 2>/dev/null || true)"
     if [[ -n "$match" ]]; then
@@ -259,7 +264,8 @@ _resolve_source_first_inline() {
       hash="$(printf "%s" "${jar}|${mtime}|${size}" | shasum -a 256 2>/dev/null | cut -d" " -f1 || printf "%s" "${jar}|${mtime}|${size}" | sha256sum 2>/dev/null | cut -d" " -f1)"
       idx="${INDEX_DIR}/${hash}.idx"
       if [[ ! -f "$idx" ]]; then
-        unzip -Z1 "$jar" >"${idx}.tmp" 2>/dev/null && mv "${idx}.tmp" "$idx" || exit 0
+        tmp="${idx}.tmp.$$"
+        unzip -Z1 "$jar" >"$tmp" 2>/dev/null && mv "$tmp" "$idx" || exit 0
       fi
       match="$(echo "$candidates" | grep -F -x -m1 -f /dev/stdin "$idx" 2>/dev/null || true)"
       if [[ -n "$match" ]]; then
@@ -278,7 +284,8 @@ _resolve_source_first_inline() {
       hash="$(printf "%s" "${jar}|${mtime}|${size}" | shasum -a 256 2>/dev/null | cut -d" " -f1 || printf "%s" "${jar}|${mtime}|${size}" | sha256sum 2>/dev/null | cut -d" " -f1)"
       idx="${INDEX_DIR}/${hash}.idx"
       if [[ ! -f "$idx" ]]; then
-        unzip -Z1 "$jar" >"${idx}.tmp" 2>/dev/null && mv "${idx}.tmp" "$idx" || exit 0
+        tmp="${idx}.tmp.$$"
+        unzip -Z1 "$jar" >"$tmp" 2>/dev/null && mv "$tmp" "$idx" || exit 0
       fi
       match="$(echo "$candidates" | grep -F -x -m1 -f /dev/stdin "$idx" 2>/dev/null || true)"
       if [[ -n "$match" ]]; then
@@ -305,17 +312,7 @@ resolve_class_location() {
 
   # 1. 如果有项目 classpath，优先在项目依赖中查找
   if [[ -n "$binary_jars_file" && -f "$binary_jars_file" ]]; then
-    # 先尝试在 sources JAR 中查找（使用进程替换避免临时文件）
-    local resolved
-    if resolved="$(_binary_jars_to_sources_inline "$binary_jars_file" | _resolve_source_first_inline "$class_fqn" "-" 2>/dev/null)"; then
-      local jar entry
-      jar="$(printf "%s" "$resolved" | cut -f1)"
-      entry="$(printf "%s" "$resolved" | cut -f2)"
-      echo "source"$'\t'"$jar"$'\t'"$entry"$'\t'"$jar"$'\t'"$entry"
-      return 0
-    fi
-
-    # 在二进制 JAR 中查找
+    # 性能优化：先在二进制 JAR（项目 classpath）中定位 class 所在 jar，再仅针对命中 jar 查 sources/下载/反编译
     local bin_resolved
     bin_resolved="$(resolve_class_first_in_jars_file "$class_fqn" "$binary_jars_file" 2>/dev/null || true)"
 
@@ -360,6 +357,16 @@ resolve_class_location() {
       fi
 
       echo "binary"$'\t'"$jar"$'\t'"$entry"$'\t'""$'\t'""
+      return 0
+    fi
+
+    # 兜底：极少数情况下（classpath 不完整/依赖异常），才尝试在已存在的 sources.jar 中全量匹配一次
+    local resolved
+    if resolved="$(_binary_jars_to_sources_inline "$binary_jars_file" | _resolve_source_first_inline "$class_fqn" "-" 2>/dev/null)"; then
+      local src_jar src_entry
+      src_jar="$(printf "%s" "$resolved" | cut -f1)"
+      src_entry="$(printf "%s" "$resolved" | cut -f2)"
+      echo "source"$'\t'""$'\t'""$'\t'"$src_jar"$'\t'"$src_entry"
       return 0
     fi
   fi
