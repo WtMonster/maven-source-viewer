@@ -8,6 +8,12 @@ Claude Code Skill：查看 Maven 项目中第三方依赖的源码，类似于 I
 curl -fsSL https://raw.githubusercontent.com/WtMonster/maven-source-viewer/main/install.sh | bash
 ```
 
+可选：跳过安装 CFR（反编译器）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/WtMonster/maven-source-viewer/main/install.sh | bash -s -- --no-cfr
+```
+
 或手动安装：
 
 ```bash
