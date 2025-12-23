@@ -459,11 +459,39 @@ try_get_idea_system_cache_classpath() {
 # Maven 命令执行
 # ============================================================================
 
+find_mvnw() {
+  local dir="${1:-}"
+  [[ -n "$dir" && -d "$dir" ]] || return 1
+
+  local cur="$dir"
+  while [[ -n "$cur" && "$cur" != "/" ]]; do
+    if [[ -x "${cur%/}/mvnw" ]]; then
+      echo "${cur%/}/mvnw"
+      return 0
+    fi
+    cur="$(dirname "$cur")"
+  done
+  return 1
+}
+
 mvn_cmd() {
+  local project_dir="${1:-}"
+
   if [[ -n "${MVN_BIN:-}" && -x "${MVN_BIN:-}" ]]; then
     echo "$MVN_BIN"
     return 0
   fi
+
+  # Maven Wrapper（无需本机安装 mvn）
+  if [[ -n "$project_dir" ]]; then
+    local mvnw
+    mvnw="$(find_mvnw "$project_dir" 2>/dev/null || true)"
+    if [[ -n "$mvnw" && -x "$mvnw" ]]; then
+      echo "$mvnw"
+      return 0
+    fi
+  fi
+
   if [[ "${IDEA_MVN_SOURCE:-}" == "idea-project" && -n "${IDEA_MVN_HOME:-}" && -x "${IDEA_MVN_HOME%/}/bin/mvn" ]]; then
     echo "${IDEA_MVN_HOME%/}/bin/mvn"
     return 0
@@ -476,7 +504,13 @@ mvn_cmd() {
     echo "${IDEA_MVN_HOME%/}/bin/mvn"
     return 0
   fi
-  echo "mvn"
+  if command -v mvn >/dev/null 2>&1; then
+    echo "mvn"
+    return 0
+  fi
+
+  die_with_hint "未找到 mvn 命令（Maven 未安装或不在 PATH）" \
+    "解决办法：1) 安装 Maven 并确保 PATH 中有 mvn；2) 设置环境变量 MVN_BIN 或 MAVEN_HOME；3) 如果项目带 mvnw，请使用 --project 指向该项目目录以自动使用 mvnw"
 }
 
 mvn_repo_local_path() {
@@ -505,7 +539,7 @@ run_mvn_local() {
   maybe_load_idea_maven_settings "$project_dir"
 
   local mvn_bin
-  mvn_bin="$(mvn_cmd)"
+  mvn_bin="$(mvn_cmd "$project_dir")"
 
   local repo_local
   repo_local="$(mvn_repo_local_path)"
@@ -856,7 +890,6 @@ resolve_binary_jars_file() {
   local mvn_offline="$4"
   local mvn_settings="$5"
   local mvn_repo_local="$6"
-  local allow_fallback="${7:-0}"
 
   local binary_jars_file=""
   local tmp_file_flag="0"
@@ -878,11 +911,6 @@ resolve_binary_jars_file() {
   elif [[ -n "$project_dir" ]]; then
     resolved_project_dir="$(resolve_project_dir "$project_dir" 2>/dev/null || true)"
     if [[ -z "$resolved_project_dir" ]]; then
-      if [[ "$allow_fallback" != "1" ]]; then
-        die_with_hint "未能定位 pom.xml: $project_dir" \
-          "为避免扫描整个本地仓库已终止；请指定正确的 Maven 项目目录，或使用 --allow-fallback 允许回退扫描 target/仓库"
-      fi
-
       local target_jars
       target_jars="$(get_project_target_jars_file "$project_dir" 2>/dev/null || true)"
       if [[ -n "$target_jars" && -f "$target_jars" ]]; then
@@ -890,28 +918,21 @@ resolve_binary_jars_file() {
         binary_jars_file="$target_jars"
         tmp_file_flag="1"
       fi
+    elif binary_jars_file="$(get_project_classpath_file "$resolved_project_dir" "$scope" "$mvn_offline" "$mvn_settings" "$mvn_repo_local" 2>/dev/null)"; then
+      tmp_file_flag="0"
     else
-      if binary_jars_file="$(get_project_classpath_file "$resolved_project_dir" "$scope" "$mvn_offline" "$mvn_settings" "$mvn_repo_local")"; then
-        tmp_file_flag="0"
-      else
-        if [[ "$allow_fallback" != "1" ]]; then
-          die_with_hint "Maven 生成项目 classpath 失败: $resolved_project_dir" \
-            "为避免扫描整个本地仓库已终止；请修复 Maven 依赖/仓库/设置后重试，或使用 --allow-fallback 允许回退扫描 target/仓库"
+      local target_jars
+      target_jars="$(get_project_target_jars_file "$resolved_project_dir" 2>/dev/null || true)"
+      if [[ -n "$target_jars" && -f "$target_jars" ]]; then
+        # 加载 IDEA 配置，以便后续 search_path 能使用正确的本地仓库
+        maybe_load_idea_maven_settings "$resolved_project_dir"
+        if [[ -n "${IDEA_MVN_LOCAL_REPO:-}" ]]; then
+          warn "Maven 解析失败，改用 target 目录 + IDEA 本地仓库回退搜索"
+        else
+          warn "Maven 解析失败，改用项目 target 目录中的依赖 JAR"
         fi
-
-        local target_jars
-        target_jars="$(get_project_target_jars_file "$resolved_project_dir" 2>/dev/null || true)"
-        if [[ -n "$target_jars" && -f "$target_jars" ]]; then
-          # 加载 IDEA 配置，以便后续 search_path 能使用正确的本地仓库
-          maybe_load_idea_maven_settings "$resolved_project_dir"
-          if [[ -n "${IDEA_MVN_LOCAL_REPO:-}" ]]; then
-            warn "Maven 解析失败，改用 target 目录 + IDEA 本地仓库回退搜索"
-          else
-            warn "Maven 解析失败，改用项目 target 目录中的依赖 JAR"
-          fi
-          binary_jars_file="$target_jars"
-          tmp_file_flag="1"
-        fi
+        binary_jars_file="$target_jars"
+        tmp_file_flag="1"
       fi
     fi
   fi

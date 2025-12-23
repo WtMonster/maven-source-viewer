@@ -148,6 +148,17 @@ JAR: /path/to/spring-web-6.1.3-sources.jar
 2. 或先手动执行 `mvn compile` 确保项目可构建
 3. 网络受限时脚本会自动重试 `--offline` 模式
 
+### 问题 2.1：mvn: command not found
+
+**现象**：`mvn: command not found`
+
+**原因**：机器未安装 Maven 或 `mvn` 不在 PATH；且脚本无法从 IDEA 缓存直接拿到 classpath。
+
+**解决方案**：
+1. 推荐：如果项目里有 `mvnw`，请使用 `--project` 指向该项目目录（脚本会自动使用 `mvnw`）
+2. 或：安装 Maven，并确保 `mvn` 在 PATH
+3. 或：设置 `MVN_BIN`（mvn 可执行文件路径）或 `MAVEN_HOME`（Maven 安装目录）
+
 ### 问题 3：源码 JAR 不存在
 
 **现象**：输出的是反编译代码（不是原始源码）

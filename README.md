@@ -68,6 +68,8 @@ chmod +x ~/.claude/skills/maven-source-viewer/scripts/*.sh
 | `JAR_LIST_CACHE_TTL` | `86400` | JAR 列表缓存有效期（秒） |
 | `MAX_LINES_DEFAULT` | `400` | 默认输出行数限制 |
 
+> 说明：如果你的机器没有安装 Maven（`mvn: command not found`），脚本会在 `--project` 场景下优先尝试使用项目内的 Maven Wrapper（`mvnw`）；否则需要你安装 Maven 或配置 `MVN_BIN/MAVEN_HOME`。
+
 ## 配置文件（全局/项目级默认值）
 
 - 全局：`~/.config/maven-source-viewer/config`
